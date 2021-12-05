@@ -4,14 +4,23 @@ use std::thread;
 
 use indicatif::{ProgressBar, ProgressStyle};
 use thiserror::Error;
+use pest::Parser;
 
-const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
+extern crate pest;
+#[macro_use]
+extern crate pest_derive;
+
+#[derive(Parser)]
+#[grammar = "syntax.pest"]
+pub struct InputParser;
+
+const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Error, Debug)]
 enum WaitError {
     #[error("Invalid arguments")]
     InvalidArgs,
-    #[error("There was a problem parsing")]
+    #[error("There was a problem parsing the input")]
     CannotParse(ParseError)
 }
 
@@ -25,8 +34,6 @@ struct Time(Duration);
 
 #[derive(Error, Debug)]
 enum ParseError {
-    #[error("Cannot understand suffix {0}")]
-    UnrecognisedSuffix(char),
     #[error("Cannot understand split {0}")]
     CannotParse(String)
 }
@@ -34,30 +41,42 @@ enum ParseError {
 impl TryFrom<String> for Time {
     type Error = ParseError;
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        let mut result = Duration::default();
-        let splits: Vec<&str> = value.split_inclusive(|c: char| c.is_alphabetic()).collect();
+        let lists = match InputParser::parse(Rule::list, &value) {
+            Ok(l) => l,
+            Err(_) => return Err(ParseError::CannotParse(value)),
+        };
 
-        for split in splits {
-            let nums = &split[..split.len()-1].parse::<u64>();
-            let denomination = &split.chars().last();
+        let mut duration = Duration::default();
 
-            match (nums, denomination) {
-                (Ok(num), Some(c)) => match c {
-                    's' => result += Duration::from_secs(*num),
-                    'm' => result += Duration::from_secs(num * 60),
-                    'h' => result += Duration::from_secs(num * 60 * 60),
-                    _ => return Err(ParseError::UnrecognisedSuffix(*c))
-                },
-                _ => return Err(ParseError::CannotParse(split.to_string()))
-                // TODO: Should properly report what was the error rather than a simple CannotParse...
+        for list in lists {
+            for section in list.into_inner() {
+                let mut inner_rules = section.into_inner();
+
+                // For a rule match we know there's going to be two fields.
+                let count: u64 = inner_rules.next().unwrap().as_str().parse().unwrap();
+                let multi: u64 = match inner_rules.next().unwrap().as_str() {
+                    "s" => 1,
+                    "m" => 60,
+                    "h" => 60 * 60,
+                    _   => unreachable!() // Technically not possible.
+                };
+
+                duration += Duration::from_secs(count * multi);
             }
         }
 
-        Ok(Time(result))
+        Ok(Time(duration))
     }
 }
 
-fn main() -> Result<(), WaitError> {
+fn main() {
+    match go() {
+        Ok(_) => (),
+        Err(e) => eprintln!("Can't continue, {}", e)
+    }
+}
+
+fn go() -> Result<(), WaitError> {
     let args: Vec<String> = env::args().collect();
 
     if args.len() != 2 {
@@ -73,7 +92,7 @@ fn main() -> Result<(), WaitError> {
 
     let pb = ProgressBar::new(to_wait.as_secs());
     pb.set_style(ProgressStyle::default_bar()
-        .template("{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}]")
+        .template("💤 [{elapsed_precise}] [{wide_bar:.cyan/blue}] [{eta_precise}]")
         .progress_chars("#>-"));
 
     while waited < to_wait {

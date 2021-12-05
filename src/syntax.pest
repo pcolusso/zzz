@@ -1,0 +1,4 @@
+multiplier = { ("h" | "m" | "s" ) }
+digits = { ('0'..'9')+ }
+section = { digits ~ multiplier }
+list = { section+ }
